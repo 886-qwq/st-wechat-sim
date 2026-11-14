@@ -27,6 +27,12 @@ SillyTavern/public/scripts/extensions/third-party/st-wechat-sim
 
 发布到 GitHub 后，也可以在 SillyTavern 的扩展安装框中输入仓库地址。仓库根目录必须直接包含 `manifest.json`、`index.js` 和 `style.css`。
 
+当前公开仓库：
+
+```text
+https://github.com/886-qwq/st-wechat-sim
+```
+
 ## 兼容性
 
 目标版本是使用 ES Module 扩展和 `generateQuietPrompt` 的现代 SillyTavern。不同版本可能调整扩展接口；安装前应先在目标酒馆源码中确认：
