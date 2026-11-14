@@ -4,11 +4,12 @@
 
 ## 当前版本
 
-`0.1.0` 是文字聊天 MVP：
+`0.2.0` 是文字聊天 MVP：
 
 - 按角色隔离并保存微信聊天记录
 - 读取当前角色卡与近期酒馆主聊天
-- 使用 SillyTavern 当前模型，通过 `generateQuietPrompt` 生成回复
+- 优先使用 SillyTavern 当前模型和 `generateRaw` 生成独立微信回复，旧版本回退到 `generateQuietPrompt`
+- 显式传入当前角色卡、用户人设和近期剧情，换角色后不会沿用上一位角色的人设
 - 提示词强制纯对话，移除常见旁白、动作和 Markdown
 - 支持单条字数、气泡数、上下文条数和保存开关
 - 为柏宝书等外部记忆插件提供 `recall` / `remember` 适配点
@@ -35,7 +36,11 @@ https://github.com/886-qwq/st-wechat-sim
 
 ## 兼容性
 
-目标版本是使用 ES Module 扩展和 `generateQuietPrompt` 的现代 SillyTavern。不同版本可能调整扩展接口；安装前应先在目标酒馆源码中确认：
+目标版本是使用 ES Module 扩展的现代 SillyTavern。插件通过
+`globalThis.SillyTavern.getContext()` 读取酒馆上下文，优先使用
+`context.generateRaw()`，旧版本回退到 `generateQuietPrompt`。
+
+不同版本可能调整扩展接口；安装前应先在目标酒馆源码中确认：
 
 ```text
 public/scripts/extensions.js
@@ -43,7 +48,10 @@ public/scripts/script.js
 public/index.html
 ```
 
-需要确认的符号包括 `getContext`、`extension_settings`、`saveSettingsDebounced` 和 `generateQuietPrompt`。
+需要确认的符号包括 `globalThis.SillyTavern.getContext`、`extensionSettings`、
+`saveSettingsDebounced`、`eventSource`、`generateRaw`。
+
+架构参考与边界见 `docs/REFERENCE-NOTES.md`。
 
 ## 柏宝书记忆适配
 

@@ -48,6 +48,7 @@ test("prompt includes character data, continuity and chat-only rules", () => {
       personality: "克制、温柔",
     },
     userName: "小满",
+    userPersona: "用户是喜欢雨天的人。",
     history: [{ role: "user", content: "在吗" }],
     mainChat: [{ mes: "我们在车站告别。", is_user: false }],
     settings: normalizeSettings({}),
@@ -57,6 +58,7 @@ test("prompt includes character data, continuity and chat-only rules", () => {
 
   assert.match(prompt, /阿澄/);
   assert.match(prompt, /小满/);
+  assert.match(prompt, /用户是喜欢雨天的人/);
   assert.match(prompt, /不要输出旁白/);
   assert.match(prompt, /阿澄记得用户喜欢雨天/);
   assert.match(prompt, /我们在车站告别/);

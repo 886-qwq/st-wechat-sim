@@ -119,14 +119,20 @@ function formatMainChat(messages, limit) {
     .join("\n");
 }
 
-function cardField(character, fieldName) {
-  const value = character?.[fieldName] ?? character?.data?.[fieldName] ?? "";
-  return String(value).trim();
+function cardField(character, ...fieldNames) {
+  for (const fieldName of fieldNames) {
+    const value = character?.[fieldName] ?? character?.data?.[fieldName];
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
 }
 
 export function buildWeChatPrompt({
   character,
   userName = "用户",
+  userPersona = "",
   history = [],
   mainChat = [],
   settings = DEFAULT_SETTINGS,
@@ -138,9 +144,13 @@ export function buildWeChatPrompt({
   const description = cardField(character, "description");
   const personality = cardField(character, "personality");
   const scenario = cardField(character, "scenario");
-  const examples = cardField(character, "mes_example");
-  const systemPrompt = cardField(character, "system_prompt");
-  const postHistoryInstructions = cardField(character, "post_history_instructions");
+  const examples = cardField(character, "mes_example", "mesExamples");
+  const systemPrompt = cardField(character, "system_prompt", "system");
+  const postHistoryInstructions = cardField(
+    character,
+    "post_history_instructions",
+    "jailbreak",
+  );
   const recentWeChat = formatWeChatHistory(history, safeSettings.historyLimit);
   const recentMainChat = safeSettings.useMainChatContext
     ? formatMainChat(mainChat, safeSettings.mainChatLimit)
@@ -153,6 +163,7 @@ export function buildWeChatPrompt({
     "",
     `角色名：${charName}`,
     `用户名：${userName}`,
+    userPersona ? `用户设定：${String(userPersona).slice(0, 2500)}` : "",
     description ? `角色描述：${description}` : "",
     personality ? `角色性格：${personality}` : "",
     scenario ? `角色场景：${scenario}` : "",

@@ -1,9 +1,3 @@
-import { extension_settings, getContext } from "../../../extensions.js";
-import {
-  eventSource,
-  event_types,
-  saveSettingsDebounced,
-} from "../../../../script.js";
 import {
   DEFAULT_SETTINGS,
   buildWeChatPrompt,
@@ -23,7 +17,12 @@ const runtime = {
   chats: loadStoredChats(),
   generating: false,
   isOpen: false,
+  settings: normalizeSettings({}),
 };
+
+function getContext() {
+  return globalThis.SillyTavern?.getContext?.() ?? null;
+}
 
 function loadStoredChats() {
   try {
@@ -39,7 +38,7 @@ function saveSettings() {
   if (runtime.settings.persistHistory) {
     saveStoredChats();
   }
-  saveSettingsDebounced();
+  getContext()?.saveSettingsDebounced?.();
 }
 
 function saveStoredChats() {
@@ -56,20 +55,50 @@ function saveStoredChats() {
 }
 
 function getSettings() {
-  extension_settings[MODULE_NAME] ??= {};
-  extension_settings[MODULE_NAME] = normalizeSettings(extension_settings[MODULE_NAME]);
-  return extension_settings[MODULE_NAME];
+  const context = getContext();
+  const settingsStore = context?.extensionSettings;
+  if (!settingsStore) {
+    runtime.settings = normalizeSettings(runtime.settings);
+    return runtime.settings;
+  }
+
+  settingsStore[MODULE_NAME] ??= {};
+  settingsStore[MODULE_NAME] = normalizeSettings(settingsStore[MODULE_NAME]);
+  return settingsStore[MODULE_NAME];
 }
 
 function getActiveCharacter() {
   const context = getContext();
-  const characterId = context.this_chid ?? context.characterId;
-  return context.characters?.[characterId] ?? context.character ?? null;
+  if (!context) {
+    return null;
+  }
+
+  const characterId = context.characterId ?? context.this_chid;
+  const character = context.characters?.[characterId] ?? context.character ?? null;
+  if (!character) {
+    return null;
+  }
+
+  const card = context.getCharacterCardFields?.() ?? {};
+  return {
+    ...character,
+    description: character.description ?? card.description,
+    personality: character.personality ?? card.personality,
+    scenario: character.scenario ?? card.scenario,
+    mes_example: character.mes_example ?? card.mesExamples,
+    system_prompt: character.system_prompt ?? card.system,
+    post_history_instructions:
+      character.post_history_instructions ?? card.jailbreak,
+  };
 }
 
 function getActiveThread() {
   const character = getActiveCharacter();
-  const key = characterKey(character, `chat-${getContext().chatId || "default"}`);
+  const context = getContext();
+  const key = characterKey(
+    character,
+    `chat-${context?.chatId || context?.getCurrentChatId?.() || "default"}`,
+  );
   runtime.activeCharacterKey = key;
   runtime.chats[key] ??= [];
   return runtime.chats[key];
@@ -88,8 +117,10 @@ function createElement(tagName, className, text) {
 
 function avatarMarkup(character) {
   const name = characterDisplayName(character);
+  const context = getContext();
   const avatar = character?.avatar
-    ? `/characters/${encodeURIComponent(character.avatar)}`
+    ? context?.getThumbnailUrl?.("avatar", character.avatar) ||
+      `/thumbnail?type=avatar&file=${encodeURIComponent(character.avatar)}`
     : "";
   const initial = Array.from(name)[0] || "微";
 
@@ -233,7 +264,10 @@ function bindUiEvents(root) {
       runtime.settings[settingName] =
         control.type === "checkbox" ? control.checked : Number(control.value);
       runtime.settings = normalizeSettings(runtime.settings);
-      extension_settings[MODULE_NAME] = runtime.settings;
+      const context = getContext();
+      if (context?.extensionSettings) {
+        context.extensionSettings[MODULE_NAME] = runtime.settings;
+      }
       syncSettingsUi();
       saveSettings();
     });
@@ -312,7 +346,7 @@ function appendMessageElement(container, message, animate = true) {
   const avatar = createElement("div", "wechat-message-avatar");
   const character = getActiveCharacter();
   if (message.role === "user") {
-    avatar.textContent = Array.from(getContext().name1 || "我")[0] || "我";
+    avatar.textContent = Array.from(getContext()?.name1 || "我")[0] || "我";
   } else {
     avatar.innerHTML = avatarMarkup(character);
   }
@@ -447,17 +481,57 @@ async function sendCurrentMessage() {
   await generateWeChatReply(text);
 }
 
-async function resolveQuietGenerator() {
-  if (typeof window.generateQuietPrompt === "function") {
-    return window.generateQuietPrompt;
+function userPersonaText(context) {
+  return String(
+    context?.powerUserSettings?.persona_description ??
+      context?.userPersona ??
+      "",
+  ).trim();
+}
+
+async function generateTavernReply({ systemPrompt, userMessage }) {
+  const context = getContext();
+
+  if (typeof context?.generateRaw === "function") {
+    return context.generateRaw({
+      systemPrompt,
+      prompt: userMessage,
+      responseLength: 512,
+      trimNames: false,
+    });
+  }
+
+  if (typeof context?.generateQuietPrompt === "function") {
+    return context.generateQuietPrompt({
+      quietPrompt: systemPrompt,
+      skipWIAN: false,
+      removeReasoning: true,
+      trimToSentence: false,
+    });
+  }
+
+  if (typeof globalThis.generateQuietPrompt === "function") {
+    return globalThis.generateQuietPrompt({
+      quietPrompt: systemPrompt,
+      skipWIAN: false,
+      removeReasoning: true,
+      trimToSentence: false,
+    });
   }
 
   const scriptModule = await import("../../../../script.js");
   if (typeof scriptModule.generateQuietPrompt === "function") {
-    return scriptModule.generateQuietPrompt;
+    return scriptModule.generateQuietPrompt({
+      quietPrompt: systemPrompt,
+      skipWIAN: false,
+      removeReasoning: true,
+      trimToSentence: false,
+    });
   }
 
-  throw new Error("当前 SillyTavern 版本没有提供 generateQuietPrompt 接口。");
+  throw new Error(
+    "当前 SillyTavern 版本没有提供 generateRaw 或 generateQuietPrompt 接口。",
+  );
 }
 
 async function collectExternalMemory(charName, userMessage, history) {
@@ -517,12 +591,16 @@ async function generateWeChatReply(userMessage) {
   try {
     const context = getContext();
     const character = getActiveCharacter();
+    if (!context || !character) {
+      throw new Error("请先在酒馆里打开一个角色聊天。");
+    }
     const thread = getActiveThread();
     const charName = characterDisplayName(character);
     const externalMemory = await collectExternalMemory(charName, userMessage, thread);
     const prompt = buildWeChatPrompt({
       character,
       userName: context.name1 || "用户",
+      userPersona: userPersonaText(context),
       history: thread.slice(0, -1),
       mainChat: context.chat || [],
       settings: runtime.settings,
@@ -530,12 +608,9 @@ async function generateWeChatReply(userMessage) {
       externalMemory,
     });
 
-    const generateQuietPrompt = await resolveQuietGenerator();
-    const rawReply = await generateQuietPrompt({
-      quietPrompt: prompt,
-      skipWIAN: false,
-      removeReasoning: true,
-      trimToSentence: false,
+    const rawReply = await generateTavernReply({
+      systemPrompt: prompt,
+      userMessage,
     });
     const bubbles = sanitizeReply(
       rawReply,
@@ -663,19 +738,48 @@ function handleCharacterOrChatChange() {
   }
 }
 
-runtime.settings = getSettings();
-createUi();
-createLauncher();
-watchForExtensionMenu();
-exposeIntegrationApi();
+let eventsBound = false;
 
-const refreshEvents = [
-  event_types.CHAT_CHANGED,
-  event_types.CHARACTER_SELECTED,
-  event_types.CHARACTER_EDITED,
-].filter(Boolean);
+function bindSillyTavernEvents() {
+  if (eventsBound) {
+    return;
+  }
 
-refreshEvents.forEach((eventName) => {
-  eventSource.on(eventName, handleCharacterOrChatChange);
-});
+  const context = getContext();
+  const eventSource = context?.eventSource;
+  const eventTypes = context?.eventTypes;
+  if (typeof eventSource?.on !== "function" || !eventTypes) {
+    setTimeout(bindSillyTavernEvents, 500);
+    return;
+  }
+
+  runtime.settings = getSettings();
+  const refreshEvents = [
+    eventTypes.CHAT_CHANGED,
+    eventTypes.CHARACTER_SELECTED,
+    eventTypes.CHARACTER_EDITED,
+  ].filter(Boolean);
+
+  refreshEvents.forEach((eventName) => {
+    eventSource.on(eventName, handleCharacterOrChatChange);
+  });
+  eventsBound = true;
+}
+
+function initializeExtension() {
+  runtime.settings = getSettings();
+  createUi();
+  createLauncher();
+  watchForExtensionMenu();
+  exposeIntegrationApi();
+  bindSillyTavernEvents();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeExtension, {
+    once: true,
+  });
+} else {
+  initializeExtension();
+}
 
